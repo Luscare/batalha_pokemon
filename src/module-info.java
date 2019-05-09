@@ -1,2 +1,0 @@
-module batalha_pokemon {
-}
