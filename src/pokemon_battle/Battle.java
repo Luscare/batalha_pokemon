@@ -1,23 +1,26 @@
 package pokemon_battle;
 
+import java.util.Random;
+
 import Events.Controller;
 import Events.Event;
 
 public class Battle extends Controller {
 	private Player player1, player2;
-
+	private boolean wild;
 	private static final int DELAY_OF_EVENT = 1500;
 	private static final int INITIAL_HP = 500;
 		
-	public Battle(Player player1, Player player2) {
+	public Battle(Player player1, Player player2, boolean wild) {
 		this.player1 = player1;
 		this.player2 = player2;
+		this.wild = wild;
 	}
 		
 	private class AttackWithCurrent extends Event {
 		private Attack attackerChosenAttack;
 		private Player attacker, attacked;
-		private boolean dead;
+		private boolean dead, willUsePokeball;
 		private double multiplier;
 		
 		public AttackWithCurrent(long eventTime, Attack attack, Player attacker, Player attacked) {
@@ -43,14 +46,41 @@ public class Battle extends Controller {
 				dead = true;
 			
 			int proxOrderAtt = (attackerCurrentPok.getAttOrder() + 1) % attackerCurrentPok.getAttacks().length;
+			
 			attackerCurrentPok.setAttOrder(proxOrderAtt);
 			attackerCurrentPok.setAttCurrent(attackerCurrentPok.getAttacks()[proxOrderAtt]);
 			
 			if (attackedCurrentPok.isAlive()) {
-				addEvent(new Battle.AttackWithCurrent(
-						System.currentTimeMillis() + DELAY_OF_EVENT,
-						attakedCurrentAttack, attacked, attacker));
+				if(!wild) {
+					addEvent(new Battle.AttackWithCurrent(
+							System.currentTimeMillis() + DELAY_OF_EVENT,
+							attakedCurrentAttack, attacked, attacker));
 				
+				} else {
+					if (attacker.isWildPokemon()) {
+						addEvent(new Battle.AttackWithCurrent(
+								System.currentTimeMillis() + DELAY_OF_EVENT,
+								attakedCurrentAttack, attacked, attacker));
+					} else { // it's possible to use pokeballs!
+						Random random = new Random();
+						int randomNumber = random.nextInt(INITIAL_HP) + 1;
+						int wildPokemonHp = attacked.getPokCurrent().getHp();
+						int chanceOfUsingPokeball = INITIAL_HP - wildPokemonHp;
+						if (randomNumber <= chanceOfUsingPokeball) {
+							// use pokeball
+							willUsePokeball = true;
+							addEvent(new Battle.UsePokeball(
+									System.currentTimeMillis() + DELAY_OF_EVENT,
+									attacker.getPokeballFree(),
+									attacker, attacked));
+						} else {
+							// attack
+							addEvent(new Battle.AttackWithCurrent(
+									System.currentTimeMillis() + DELAY_OF_EVENT,
+									attakedCurrentAttack, attacked, attacker));
+						}
+					}
+}
 			} else {
 				if (attacked.hasItens()) {
 					// use item
@@ -77,15 +107,69 @@ public class Battle extends Controller {
 		
 		public String description() {
 			String descr = null;
-			descr = (attacker.getName() + "'s turn: " + "Pokemon " + attacker.getPokCurrent().getName() 
-					+ " attacks (" + attackerChosenAttack.getName() + " with multiplier " + multiplier
-					+ ")! " + attacked.getName() + "'s Pokemon " + attacked.getPokCurrent().getName()
-					+ " actual HP: " + attacked.getPokCurrent().getHp() + "."
-					+ (dead ? " Pokemon " + attacked.getPokCurrent().getName() + " is dead." : ""));
+			if (!willUsePokeball) {
+				descr = (attacker.getName() + "'s turn: " + "Pokemon " + attacker.getPokCurrent().getName() 
+						+ " attacks (" + attackerChosenAttack.getName() + " with multiplier " + multiplier
+						+ ")! " + attacked.getName() + "'s Pokemon " + attacked.getPokCurrent().getName()
+						+ " actual HP: " + attacked.getPokCurrent().getHp() + "."
+						+ (dead ? " Pokemon " + attacked.getPokCurrent().getName() + " is dead." : ""));
+			} else {
+				descr = (attacker.getName() + " will use pokeball!");
+			}
 			return descr;
 		}
 	}
-	
+	private class UsePokeball extends Event {
+		private Pokeball chosenPokeball;
+		private Player user, wildPokemon;
+		private boolean success;
+		
+		public UsePokeball(long eventTime, Pokeball chosenPokeball, Player user, Player wildPokemon) {
+			super(eventTime);
+			this.chosenPokeball = chosenPokeball;
+			this.user = user;
+			this.wildPokemon = wildPokemon;
+		}
+
+		public void action() {
+			Random random = new Random();
+			int wildPokCatchRate = wildPokemon.getPokCurrent().getCatchRate();
+			int maxRealCatchRate = (int) (wildPokCatchRate * chosenPokeball.getRate());
+			int minRealCatchRate = wildPokCatchRate / 3;
+			int randomNumber = random.nextInt(maxRealCatchRate - minRealCatchRate) + minRealCatchRate;
+			int realCatchRate = getRealCatchRate();
+
+			if (randomNumber < realCatchRate) {
+				chosenPokeball.setWildPokemon(wildPokemon.getPokCurrent());
+				user.setNextPokeballFree();
+				success = true;
+				addEvent(new Battle.RunAway(
+						System.currentTimeMillis() + DELAY_OF_EVENT,
+						false, true, wildPokemon, user));
+			} else {
+				success = false;
+				Attack wildPokAttCurr = wildPokemon.getPokCurrent().getAttCurrent();
+				addEvent(new Battle.AttackWithCurrent(
+						System.currentTimeMillis() + DELAY_OF_EVENT,
+						wildPokAttCurr, wildPokemon, user));
+			}
+		}
+		
+		private int getRealCatchRate() {
+			int wildPokHp = wildPokemon.getPokCurrent().getHp();
+			int wildPokCatchRate = wildPokemon.getPokCurrent().getCatchRate();
+			return (int) (((3 * INITIAL_HP - 2 * wildPokHp) * wildPokCatchRate * 
+					chosenPokeball.getRate()) / (3 * INITIAL_HP));
+		}
+
+		public String description() {
+			String wildPokemonName = wildPokemon.getPokCurrent().getName();
+			return (user.getName() + "'s turn: He throws a Pokeball " + chosenPokeball.getName()
+					+ " against " + wildPokemonName + ". ")
+					+ (success ? "He's got " + wildPokemonName + "!" : "He couldn't get " 
+					+ wildPokemonName + "...");
+		}
+	}
 		private class ChangeCurrentPokemon extends Event {
 			private Pokemon newCurrent, previous;
 			private Player changer, next;
@@ -212,123 +296,126 @@ public class Battle extends Controller {
 		}
 		
 		private void prepareBattle() {
-			// player 1
-			Pokemon[] player1Pokemons = new Pokemon[6];
-			
-			Attack[] attacksBulbasaur = new Attack[4];
-			attacksBulbasaur[0] = new Attack("Solar Beam", PokemonType.GRASS, 120, 3);
-			attacksBulbasaur[1] = new Attack("Tackle", PokemonType.NORMAL, 35, 0);
-			attacksBulbasaur[2] = new Attack("Petal Dance", PokemonType.GRASS, 70, 2);
-			attacksBulbasaur[3] = new Attack("Razor Leaf", PokemonType.GRASS, 55, 1);
-			player1Pokemons[0] = new Pokemon("Bulbasaur", INITIAL_HP, attacksBulbasaur,
-					PokemonType.GRASS, 45);
-			
-			Attack[] attacksCharmander = new Attack[4];
-			attacksCharmander[0] = new Attack("Ember", PokemonType.FIRE, 40, 2);
-			attacksCharmander[1] = new Attack("Flame Thrower", PokemonType.FIRE, 95, 2);
-			attacksCharmander[2] = new Attack("Metal Claw", PokemonType.STEEL, 50, 1);
-			attacksCharmander[3] = new Attack("Rage", PokemonType.NORMAL, 20, 0);
-			player1Pokemons[1] = new Pokemon("Charmander", INITIAL_HP, attacksCharmander, 
-					PokemonType.FIRE, 45);
-			
-			Attack[] attacksSandslash = new Attack[3];
-			attacksSandslash[0] = new Attack("Swift", PokemonType.NORMAL, 60, 1);
-			attacksSandslash[1] = new Attack("Fury Swipes", PokemonType.NORMAL, 35, 0);
-			attacksSandslash[2] = new Attack("Slash", PokemonType.NORMAL, 70, 1);
-			player1Pokemons[2] = new Pokemon("Sandslash", INITIAL_HP, attacksSandslash, 
-					PokemonType.GROUND, 90);
-			
-			Attack[] attacksPidgey = new Attack[1];
-			attacksPidgey[0] = new Attack("Gust", PokemonType.FLYING, 40, 0);
-			player1Pokemons[3] = new Pokemon("Pidgey", INITIAL_HP, attacksPidgey, 
-					PokemonType.FLYING, 255);
-			
-			Attack[] attacksPikachu = new Attack[4];
-			attacksPikachu[0] = new Attack("Thunderbolt", PokemonType.ELECTRIC, 95, 1);
-			attacksPikachu[1] = new Attack("Quick Attack", PokemonType.NORMAL, 40, 0);
-			attacksPikachu[2] = new Attack("Iron Tail", PokemonType.STEEL, 100, 2);
-			attacksPikachu[3] = new Attack("Tackle", PokemonType.NORMAL, 35, 0);
-			player1Pokemons[4] = new Pokemon("Pikachu", INITIAL_HP, attacksPikachu, 
-					PokemonType.ELECTRIC, 190);
-			
-			Attack[] attacksSquirtle = new Attack[4];
-			attacksSquirtle[0] = new Attack("Bubble", PokemonType.WATER, 20, 0);
-			attacksSquirtle[1] = new Attack("Hydro Pump", PokemonType.WATER, 120, 2);
-			attacksSquirtle[2] = new Attack("Ice Beam", PokemonType.ICE, 95, 1);
-			attacksSquirtle[3] = new Attack("Skull Bash", PokemonType.NORMAL, 100, 1);
-			player1Pokemons[5] = new Pokemon("Squirtle", INITIAL_HP, attacksSquirtle, 
-					PokemonType.WATER, 45);
-			
-			Item[] player1Items = new Item[2];
-			player1Items[0] = new Item("HP Up", 100, 3);
-			player1Items[1] = new Item("Health Wing", 150, 1);
-			
-			
-			player1 = new Player("Frito", player1Pokemons, player1Items);
-			
-			// player 2
-			Pokemon[] player2Pokemons = new Pokemon[6];
-			
-			Attack[] attacksVenusaur = new Attack[4];
-			attacksVenusaur[0] = new Attack("Vine Whip", PokemonType.GRASS, 35, 1);
-			attacksVenusaur[1] = new Attack("Razor Leaf", PokemonType.GRASS, 55, 1);
-			attacksVenusaur[2] = new Attack("Sweet Scent", PokemonType.NORMAL, 0, 0);
-			attacksVenusaur[3] = new Attack("Tackle", PokemonType.NORMAL, 35, 0);
-			player2Pokemons[0] = new Pokemon("Venusaur", INITIAL_HP, attacksVenusaur, 
-					PokemonType.GRASS, 45);
-			
-			Attack[] attacksCharizard = new Attack[4];
-			attacksCharizard[0] = new Attack("Dragon Breath", PokemonType.DRAGON, 60, 0);
-			attacksCharizard[1] = new Attack("Flame Thrower", PokemonType.FIRE, 95, 2);
-			attacksCharizard[2] = new Attack("Steal Wing", PokemonType.STEEL, 70, 1);
-			attacksCharizard[3] = new Attack("Iron Tail", PokemonType.STEEL, 1020, 3);
-			player2Pokemons[1] = new Pokemon("Charizard", INITIAL_HP, attacksCharizard, 
-					PokemonType.FIRE, 45);
-			
-			Attack[] attacksButterfree = new Attack[3];
-			attacksButterfree[0] = new Attack("Confusion", PokemonType.PSYCHIC, 50, 1);
-			attacksButterfree[1] = new Attack("Gust", PokemonType.FLYING, 40, 0);
-			attacksButterfree[2] = new Attack("Tackle", PokemonType.NORMAL, 35, 0);
-			player2Pokemons[2] = new Pokemon("Butterfree", INITIAL_HP, attacksButterfree, 
-					PokemonType.BUG, 45);
-			
-			Attack[] attacksPidgeot = new Attack[3];
-			attacksPidgeot[0] = new Attack("Fly", PokemonType.FLYING, 70, 2);
-			attacksPidgeot[1] = new Attack("Peck", PokemonType.FLYING, 35, 1);
-			attacksPidgeot[2] = new Attack("Tackle", PokemonType.NORMAL, 35, 0);
-			player2Pokemons[3] = new Pokemon("Pidgeot", INITIAL_HP, attacksPidgeot, 
-					PokemonType.FLYING, 45);
-			
-			Attack[] attacksArbok = new Attack[4];
-			attacksArbok[0] = new Attack("Wrap", PokemonType.NORMAL, 15, 0);
-			attacksArbok[1] = new Attack("Acid", PokemonType.POISON, 40, 1);
-			attacksArbok[2] = new Attack("Headbutt", PokemonType.NORMAL, 70, 2);
-			attacksArbok[3] = new Attack("Poison Sting", PokemonType.POISON, 15, 0);
-			player2Pokemons[4] = new Pokemon("Arbok", INITIAL_HP, attacksArbok, 
-					PokemonType.POISON, 90);
-			
-			Attack[] attacksJigglypuff = new Attack[4];
-			attacksJigglypuff[0] = new Attack("Body Slum", PokemonType.NORMAL, 85, 2);
-			attacksJigglypuff[1] = new Attack("Rollout", PokemonType.ROCK, 30, 1);
-			attacksJigglypuff[2] = new Attack("Flamethrower", PokemonType.FIRE, 95, 2);
-			attacksJigglypuff[3] = new Attack("Doubleslap", PokemonType.NORMAL, 15, 0);
-			player2Pokemons[5] = new Pokemon("Jigglypuff", INITIAL_HP, attacksJigglypuff, 
-					PokemonType.FAIRY, 170);
-			
-			Item[] player2Items = new Item[2];
-			player2Items[0] = new Item("HP Up", 100, 2);
-			player2Items[1] = new Item("Health Wing", 150, 2);
-			
-			
-			player2 = new Player("Lucas Seiji", player2Pokemons, player2Items);
-			
-		}
+			if (!wild) {
+				// player 1
+				Pokemon[] player1Pokemons = new Pokemon[6];
+				
+				Attack[] attacksBulbasaur = new Attack[4];
+				attacksBulbasaur[0] = new Attack("Solar Beam", PokemonType.GRASS, 120, 3);
+				attacksBulbasaur[1] = new Attack("Tackle", PokemonType.NORMAL, 35, 0);
+				attacksBulbasaur[2] = new Attack("Petal Dance", PokemonType.GRASS, 70, 2);
+				attacksBulbasaur[3] = new Attack("Razor Leaf", PokemonType.GRASS, 55, 1);
+				player1Pokemons[0] = new Pokemon("Bulbasaur", INITIAL_HP, attacksBulbasaur,
+						PokemonType.GRASS, 45);
+				
+				Attack[] attacksCharmander = new Attack[4];
+				attacksCharmander[0] = new Attack("Ember", PokemonType.FIRE, 40, 2);
+				attacksCharmander[1] = new Attack("Flame Thrower", PokemonType.FIRE, 95, 2);
+				attacksCharmander[2] = new Attack("Metal Claw", PokemonType.STEEL, 50, 1);
+				attacksCharmander[3] = new Attack("Rage", PokemonType.NORMAL, 20, 0);
+				player1Pokemons[1] = new Pokemon("Charmander", INITIAL_HP, attacksCharmander, 
+						PokemonType.FIRE, 45);
+				
+				Attack[] attacksSandslash = new Attack[3];
+				attacksSandslash[0] = new Attack("Swift", PokemonType.NORMAL, 60, 1);
+				attacksSandslash[1] = new Attack("Fury Swipes", PokemonType.NORMAL, 35, 0);
+				attacksSandslash[2] = new Attack("Slash", PokemonType.NORMAL, 70, 1);
+				player1Pokemons[2] = new Pokemon("Sandslash", INITIAL_HP, attacksSandslash, 
+						PokemonType.GROUND, 90);
+				
+				Attack[] attacksPidgey = new Attack[1];
+				attacksPidgey[0] = new Attack("Gust", PokemonType.FLYING, 40, 0);
+				player1Pokemons[3] = new Pokemon("Pidgey", INITIAL_HP, attacksPidgey, 
+						PokemonType.FLYING, 255);
+				
+				Attack[] attacksPikachu = new Attack[4];
+				attacksPikachu[0] = new Attack("Thunderbolt", PokemonType.ELECTRIC, 95, 1);
+				attacksPikachu[1] = new Attack("Quick Attack", PokemonType.NORMAL, 40, 0);
+				attacksPikachu[2] = new Attack("Iron Tail", PokemonType.STEEL, 100, 2);
+				attacksPikachu[3] = new Attack("Tackle", PokemonType.NORMAL, 35, 0);
+				player1Pokemons[4] = new Pokemon("Pikachu", INITIAL_HP, attacksPikachu, 
+						PokemonType.ELECTRIC, 190);
+				
+				Attack[] attacksSquirtle = new Attack[4];
+				attacksSquirtle[0] = new Attack("Bubble", PokemonType.WATER, 20, 0);
+				attacksSquirtle[1] = new Attack("Hydro Pump", PokemonType.WATER, 120, 2);
+				attacksSquirtle[2] = new Attack("Ice Beam", PokemonType.ICE, 95, 1);
+				attacksSquirtle[3] = new Attack("Skull Bash", PokemonType.NORMAL, 100, 1);
+				player1Pokemons[5] = new Pokemon("Squirtle", INITIAL_HP, attacksSquirtle, 
+						PokemonType.WATER, 45);
+				
+				Item[] player1Items = new Item[2];
+				player1Items[0] = new Item("HP Up", 100, 3);
+				player1Items[1] = new Item("Health Wing", 150, 1);
+				
+				Pokeball[] player1Pokeballs = {};
+				
+				player1 = new Player("Frito", player1Pokemons, player1Items, player1Pokeballs, false);
+				
+				// player 2
+				Pokemon[] player2Pokemons = new Pokemon[6];
+				
+				Attack[] attacksVenusaur = new Attack[4];
+				attacksVenusaur[0] = new Attack("Vine Whip", PokemonType.GRASS, 35, 1);
+				attacksVenusaur[1] = new Attack("Razor Leaf", PokemonType.GRASS, 55, 1);
+				attacksVenusaur[2] = new Attack("Sweet Scent", PokemonType.NORMAL, 0, 0);
+				attacksVenusaur[3] = new Attack("Tackle", PokemonType.NORMAL, 35, 0);
+				player2Pokemons[0] = new Pokemon("Venusaur", INITIAL_HP, attacksVenusaur, 
+						PokemonType.GRASS, 45);
+				
+				Attack[] attacksCharizard = new Attack[4];
+				attacksCharizard[0] = new Attack("Dragon Breath", PokemonType.DRAGON, 60, 0);
+				attacksCharizard[1] = new Attack("Flame Thrower", PokemonType.FIRE, 95, 2);
+				attacksCharizard[2] = new Attack("Steal Wing", PokemonType.STEEL, 70, 1);
+				attacksCharizard[3] = new Attack("Iron Tail", PokemonType.STEEL, 1020, 3);
+				player2Pokemons[1] = new Pokemon("Charizard", INITIAL_HP, attacksCharizard, 
+						PokemonType.FIRE, 45);
+				
+				Attack[] attacksButterfree = new Attack[3];
+				attacksButterfree[0] = new Attack("Confusion", PokemonType.PSYCHIC, 50, 1);
+				attacksButterfree[1] = new Attack("Gust", PokemonType.FLYING, 40, 0);
+				attacksButterfree[2] = new Attack("Tackle", PokemonType.NORMAL, 35, 0);
+				player2Pokemons[2] = new Pokemon("Butterfree", INITIAL_HP, attacksButterfree, 
+						PokemonType.BUG, 45);
+				
+				Attack[] attacksPidgeot = new Attack[3];
+				attacksPidgeot[0] = new Attack("Fly", PokemonType.FLYING, 70, 2);
+				attacksPidgeot[1] = new Attack("Peck", PokemonType.FLYING, 35, 1);
+				attacksPidgeot[2] = new Attack("Tackle", PokemonType.NORMAL, 35, 0);
+				player2Pokemons[3] = new Pokemon("Pidgeot", INITIAL_HP, attacksPidgeot, 
+						PokemonType.FLYING, 45);
+				
+				Attack[] attacksArbok = new Attack[4];
+				attacksArbok[0] = new Attack("Wrap", PokemonType.NORMAL, 15, 0);
+				attacksArbok[1] = new Attack("Acid", PokemonType.POISON, 40, 1);
+				attacksArbok[2] = new Attack("Headbutt", PokemonType.NORMAL, 70, 2);
+				attacksArbok[3] = new Attack("Poison Sting", PokemonType.POISON, 15, 0);
+				player2Pokemons[4] = new Pokemon("Arbok", INITIAL_HP, attacksArbok, 
+						PokemonType.POISON, 90);
+				
+				Attack[] attacksJigglypuff = new Attack[4];
+				attacksJigglypuff[0] = new Attack("Body Slum", PokemonType.NORMAL, 85, 2);
+				attacksJigglypuff[1] = new Attack("Rollout", PokemonType.ROCK, 30, 1);
+				attacksJigglypuff[2] = new Attack("Flamethrower", PokemonType.FIRE, 95, 2);
+				attacksJigglypuff[3] = new Attack("Doubleslap", PokemonType.NORMAL, 15, 0);
+				player2Pokemons[5] = new Pokemon("Jigglypuff", INITIAL_HP, attacksJigglypuff, 
+						PokemonType.FAIRY, 170);
+				
+				Item[] player2Items = new Item[2];
+				player2Items[0] = new Item("HP Up", 100, 2);
+				player2Items[1] = new Item("Health Wing", 150, 2);
+				
+				Pokeball[] player2Pokeballs = {};
+				
+				player2 = new Player("Saito", player2Pokemons, player2Items, player2Pokeballs, false);
+			}
+	}
 		
 		public static void main(String[] args) {
 			// for testing a battle (exercise 1)
 			Player player1 = null;
 			Player player2 = null;
-			Battle newBattle = new Battle(player1, player2);
+			Battle newBattle = new Battle(player1, player2, false);
 			long tm = System.currentTimeMillis();
 			newBattle.addEvent(newBattle.new StartBattle(tm));
 			newBattle.run();
